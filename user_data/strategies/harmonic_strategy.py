@@ -2,13 +2,46 @@ import numpy as np
 from scipy.signal import argrelextrema
 import pandas as pd
 
+# --- Harmonic Strategy Settings ---
+# Adjust these values to control pattern sensitivity and risk parameters.
+#
+# error_tolerance: how closely the price moves must match harmonic ratios.
+#   Use a smaller value for tighter pattern matching, larger for more flexibility.
+# stop_loss_pct: percent distance from entry to place a stop-loss order.
+#   e.g. 0.02 = 2% below entry for LONG trades, 2% above entry for SHORT trades.
+# trailing_stop_pct: percent distance for a trailing stop.
+#   The trailing stop follows the price by this percentage after entry.
+DEFAULT_ERROR_TOLERANCE = 0.05
+DEFAULT_STOP_LOSS_PCT = 0.02
+DEFAULT_TRAILING_STOP_PCT = 0.02
+
 class HarmonicStrategy:
-    def __init__(self, error_tolerance=0.05):
+    """Harmonic pattern strategy with stop-loss and trailing-stop trade planning."""
+
+    def __init__(self, error_tolerance=DEFAULT_ERROR_TOLERANCE, stop_loss_pct=DEFAULT_STOP_LOSS_PCT, trailing_stop_pct=DEFAULT_TRAILING_STOP_PCT):
         self.error_tolerance = error_tolerance
+        self.stop_loss_pct = stop_loss_pct
+        self.trailing_stop_pct = trailing_stop_pct
+        self.min_data_points = 21
+
+    def _format_trade_plan(self, direction, entry_price, pattern):
+        stop_loss = entry_price * (1 - self.stop_loss_pct) if direction == "LONG" else entry_price * (1 + self.stop_loss_pct)
+        trailing_stop = entry_price * (1 - self.trailing_stop_pct) if direction == "LONG" else entry_price * (1 + self.trailing_stop_pct)
+        return {
+            "signal": "OPEN_POSITION",
+            "pattern": pattern,
+            "direction": direction,
+            "entry_price": round(entry_price, 8),
+            "stop_loss": round(stop_loss, 8),
+            "trailing_stop": round(trailing_stop, 8)
+        }
+
+    def _determine_direction(self, X, A, B, C, D):
+        return "SHORT" if D > C else "LONG"
 
     def analyze(self, price_data):
         """
-        The entry point called by main.py. 
+        The entry point called by main.py.
         Converts raw API list into a DataFrame and runs analysis.
         """
         try:
@@ -24,16 +57,20 @@ class HarmonicStrategy:
                 {'Close': float(p['closePrice']['ask'])} for p in raw_list
             ])
 
-            if len(df) < 21: # 'order=10' needs at least 21 points to find a peak
+            if len(df) < self.min_data_points:
                 return "WAITING_FOR_DATA"
 
             # 2. Find Peaks/Valleys (ZigZag)
             points = self.find_peaks(df)
-            
+
             # 3. Analyze for patterns
             pattern = self.analyze_patterns(points)
-            
-            return pattern if pattern else "NO_PATTERN"
+            if not pattern:
+                return "NO_PATTERN"
+
+            entry_price = float(df.Close.iloc[-1])
+            direction = self._determine_direction(*points[-5:])
+            return self._format_trade_plan(direction, entry_price, pattern)
 
         except Exception as e:
             return f"STRATEGY_ERROR: {str(e)}"

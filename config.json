@@ -1,0 +1,15 @@
+{
+  "selected_strategy": "HarmonicStrategy",
+  "watch_pairs": [
+    "BTCUSD",
+    "ETHUSD",
+    "LTCUSD",
+    "XRPUSD",
+    "BCHUSD",
+    "ADAUSD",
+    "DOTUSD",
+    "LINKUSD",
+    "SOLUSD",
+    "BNBUSD"
+  ]
+}
