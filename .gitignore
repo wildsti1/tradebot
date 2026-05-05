@@ -1,0 +1,28 @@
+# --- Secrets ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv
+venv/
+env/
+lib/
+lib64/
+
+# --- Docker ---
+.dockerignore
+
+# --- Data & Logs ---
+# Keep the folder structure but ignore the actual files
+user_data/logs/*.log
+user_data/data/*.json
+user_data/data/*.csv
+
+# --- System & IDE ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
