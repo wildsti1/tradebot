@@ -22,6 +22,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def clamp(value, min_value, max_value):
+    return max(min_value, min(max_value, value))
+
+def calc_size_from_risk(balance, entry_price, stop_level, risk_pct, min_size, max_size):
+    """
+    Simple risk sizing consistent with this bot's PnL math:
+      pnl ~= (exit - entry) * size  (or inverse for SHORT)
+
+    Risk amount = balance * risk_pct/100
+    stop_distance = abs(entry - stop)
+    size = risk_amount / stop_distance
+    """
+    try:
+        balance = float(balance)
+        entry_price = float(entry_price)
+        stop_level = float(stop_level)
+        risk_pct = float(risk_pct)
+        min_size = float(min_size)
+        max_size = float(max_size)
+    except (TypeError, ValueError):
+        return None
+
+    if balance <= 0 or risk_pct <= 0:
+        return None
+
+    stop_distance = abs(entry_price - stop_level)
+    if stop_distance <= 0:
+        return None
+
+    risk_amount = balance * (risk_pct / 100.0)
+    size = risk_amount / stop_distance
+    return clamp(size, min_size, max_size)
+
 class Position:
     def __init__(self, symbol, direction, size, entry_price, stop_loss, take_profit, deal_id):
         self.symbol = symbol
@@ -113,7 +146,12 @@ def main():
             "selected_strategy": "ConsolidationBreakoutStrategy",
             "watch_pairs": [
                 "EURUSD"
-            ]
+            ],
+            "risk": {
+                "risk_per_trade_pct": 1.0,
+                "min_size": 0.01,
+                "max_size": 5.0
+            }
         }
 
         if not os.path.exists(config_path):
@@ -129,6 +167,25 @@ def main():
                     config["watch_pairs"] = defaults["watch_pairs"]
                 if not config.get("selected_strategy"):
                     config["selected_strategy"] = defaults["selected_strategy"]
+                if not isinstance(config.get("risk"), dict):
+                    config["risk"] = defaults["risk"]
+                else:
+                    for k, v in defaults["risk"].items():
+                        if k not in config["risk"]:
+                            config["risk"][k] = v
+
+                # Backwards compatibility: allow legacy `risk_pct` at top-level
+                # - if <= 1, treat as fraction (0.3 => 30%)
+                # - else treat as percent
+                if "risk_pct" in config and isinstance(config.get("risk"), dict):
+                    try:
+                        legacy = float(config.get("risk_pct"))
+                        if legacy <= 1:
+                            config["risk"]["risk_per_trade_pct"] = legacy * 100.0
+                        else:
+                            config["risk"]["risk_per_trade_pct"] = legacy
+                    except (TypeError, ValueError):
+                        pass
                 return config
         except Exception as e:
             logger.error(f"Error reading config.json: {e}")
@@ -176,6 +233,26 @@ def main():
         logger.error("No trading pairs configured in config.json. Exiting.")
         return
 
+    risk_cfg = config.get("risk") or {}
+    try:
+        risk_per_trade_pct = float(risk_cfg.get("risk_per_trade_pct", 1.0))
+    except (TypeError, ValueError):
+        risk_per_trade_pct = 1.0
+    try:
+        min_size = float(risk_cfg.get("min_size", 0.01))
+    except (TypeError, ValueError):
+        min_size = 0.01
+    try:
+        max_size = float(risk_cfg.get("max_size", 5.0))
+    except (TypeError, ValueError):
+        max_size = 5.0
+
+    risk_per_trade_pct = clamp(risk_per_trade_pct, 0.0, 100.0)
+    min_size = max(0.0, min_size)
+    max_size = max(min_size, max_size)
+    if risk_per_trade_pct >= 30:
+        logger.warning("Risk per trade is set to >= 30%% of balance. This is extremely risky.")
+
     watch_pairs = [pair.strip().upper() for pair in watch_pairs if isinstance(pair, str) and pair.strip()]
     logger.info(f"Watching trading pairs: {', '.join(watch_pairs)}")
 
@@ -209,15 +286,31 @@ def main():
                     if signal.get('signal') == 'OPEN_POSITION':
                         # Open position
                         direction = 'BUY' if signal['direction'] == 'LONG' else 'SELL'
-                        size = 0.01  # Small lot size
                         stop_level = signal.get('stop_loss')
                         limit_level = signal.get('take_profit')
+                        entry_price = signal.get('entry_price')
+
+                        size = None
+                        if stop_level is not None and entry_price is not None:
+                            # Prefer available balance for risk sizing (more conservative than total balance).
+                            sizing_balance = balance_info.get('available', 0) or balance_info.get('balance', 0)
+                            size = calc_size_from_risk(
+                                sizing_balance,
+                                entry_price,
+                                stop_level,
+                                risk_per_trade_pct,
+                                min_size,
+                                max_size,
+                            )
+                        if size is None or size <= 0:
+                            size = min_size
+
                         result = client.open_position(market_symbol, direction, size, stop_level, limit_level)
                         if result and 'dealReference' in result:
                             deal_id = result['dealReference']
-                            pos = Position(market_symbol, signal['direction'], size, signal['entry_price'], stop_level, limit_level, deal_id)
+                            pos = Position(market_symbol, signal['direction'], size, entry_price, stop_level, limit_level, deal_id)
                             open_positions[market_symbol] = pos
-                            logger.info(f"Opened position: {market_symbol} {direction} at {signal['entry_price']}")
+                            logger.info(f"Opened position: {market_symbol} {direction} size={size} at {entry_price}")
                         else:
                             logger.error(f"Failed to open position for {market_symbol}")
                     elif signal.get('signal') == 'CLOSE_POSITION':

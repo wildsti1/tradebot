@@ -2,5 +2,6 @@
   "selected_strategy": "ConsolidationBreakoutStrategy",
   "watch_pairs": [
     "EURUSD"
-  ]
+  ],
+  "risk_pct": 0.3
 }
