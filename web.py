@@ -1,9 +1,12 @@
+import os
+import secrets
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from flask import Flask, render_template_string, jsonify, request
+from flask import Flask, render_template_string, jsonify, request, session
 
 SOFIA_TZ = ZoneInfo('Europe/Sofia')
 app = Flask(__name__)
+app.secret_key = os.getenv('TRADEBOT_SECRET_KEY') or secrets.token_hex(32)
 
 # These will be populated by main.py
 balance_info = {'balance': 0.0, 'available': 0.0}

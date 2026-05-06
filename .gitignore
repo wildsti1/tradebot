@@ -1,5 +1,7 @@
 # --- Secrets ---
 .env
+.env-prod
+.env-test
 
 # --- Python ---
 __pycache__/
