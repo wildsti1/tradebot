@@ -64,3 +64,50 @@ class CapitalClient:
         except Exception as e:
             logging.error(f"Error fetching prices: {str(e)}")
             return None
+
+    def get_accounts(self):
+        """Fetches account information including balance."""
+        url = f"{self.base_url}/accounts"
+        try:
+            response = requests.get(url, headers=self.headers)
+            return response.json()
+        except Exception as e:
+            logging.error(f"Error fetching accounts: {str(e)}")
+            return None
+
+    def get_positions(self):
+        """Fetches open positions."""
+        url = f"{self.base_url}/positions"
+        try:
+            response = requests.get(url, headers=self.headers)
+            return response.json()
+        except Exception as e:
+            logging.error(f"Error fetching positions: {str(e)}")
+            return None
+
+    def open_position(self, epic, direction, size, stop_level=None, limit_level=None):
+        """Opens a new position."""
+        url = f"{self.base_url}/positions"
+        payload = {
+            "epic": epic,
+            "direction": direction,  # BUY or SELL
+            "size": size,
+            "stopLevel": stop_level,
+            "limitLevel": limit_level
+        }
+        try:
+            response = requests.post(url, json=payload, headers=self.headers)
+            return response.json()
+        except Exception as e:
+            logging.error(f"Error opening position: {str(e)}")
+            return None
+
+    def close_position(self, deal_id):
+        """Closes an open position."""
+        url = f"{self.base_url}/positions/{deal_id}"
+        try:
+            response = requests.delete(url, headers=self.headers)
+            return response.json()
+        except Exception as e:
+            logging.error(f"Error closing position: {str(e)}")
+            return None

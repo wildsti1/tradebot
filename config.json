@@ -1,15 +1,6 @@
 {
-  "selected_strategy": "HarmonicStrategy",
+  "selected_strategy": "ConsolidationBreakoutStrategy",
   "watch_pairs": [
-    "BTCUSD",
-    "ETHUSD",
-    "LTCUSD",
-    "XRPUSD",
-    "BCHUSD",
-    "ADAUSD",
-    "DOTUSD",
-    "LINKUSD",
-    "SOLUSD",
-    "BNBUSD"
+    "EURUSD"
   ]
 }
