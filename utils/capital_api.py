@@ -1,3 +1,4 @@
+import os
 import requests
 import json
 import logging
@@ -83,6 +84,22 @@ class CapitalClient:
             return response.json()
         except Exception as e:
             logging.error(f"Error fetching positions: {str(e)}")
+            return None
+
+    def get_trade_history(self, endpoint=None, params=None):
+        """Fetches trade history or closed positions from Capital API."""
+        if endpoint is None:
+            endpoint = os.getenv("CAPITAL_TRADE_HISTORY_ENDPOINT", "/positions/history")
+
+        url = endpoint if endpoint.startswith("http") else f"{self.base_url}{endpoint}"
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            if response.status_code == 200:
+                return response.json()
+            logging.warning(f"Trade history request returned {response.status_code}: {response.text}")
+            return None
+        except Exception as e:
+            logging.error(f"Error fetching trade history from {url}: {str(e)}")
             return None
 
     def open_position(self, epic, direction, size, stop_level=None, limit_level=None):

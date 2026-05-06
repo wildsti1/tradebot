@@ -1,11 +1,16 @@
-from flask import Flask, render_template_string, jsonify
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from flask import Flask, render_template_string, jsonify, request
 
+SOFIA_TZ = ZoneInfo('Europe/Sofia')
 app = Flask(__name__)
 
 # These will be populated by main.py
 balance_info = {'balance': 0.0, 'available': 0.0}
 open_positions = {}
 closed_trades = []
+request_stats = {'count': 0, 'last_request': None}
+server_start_time = datetime.now(SOFIA_TZ)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -224,6 +229,30 @@ HTML_TEMPLATE = """
         
         <div class="grid">
             <div class="card">
+                <div class="card-title">Bot Status</div>
+                <div class="card-value positive">Online</div>
+                <div class="card-subtitle">Server is running</div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">Server Started</div>
+                <div class="card-value">{{ server_start_time }}</div>
+                <div class="card-subtitle">Sofia time zone</div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">Request Count</div>
+                <div class="card-value neutral">{{ request_count }}</div>
+                <div class="card-subtitle">Dashboard reloads</div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">Last Request</div>
+                <div class="card-value">{{ last_request_time }}</div>
+                <div class="card-subtitle">Latest request timestamp</div>
+            </div>
+            
+            <div class="card">
                 <div class="card-title">Account Balance</div>
                 <div class="card-value positive">{{ "%.2f"|format(balance_info.get('balance', 0) | float) }}</div>
                 <div class="card-subtitle">Total Balance</div>
@@ -334,11 +363,18 @@ HTML_TEMPLATE = """
 </html>
 """
 
+@app.before_request
+def track_request():
+    request_stats['count'] += 1
+    request_stats['last_request'] = datetime.now(SOFIA_TZ)
+    app.logger.info(f"Incoming request: {request.method} {request.path}")
+
 @app.route('/')
 def dashboard():
     total_pnl = sum(t.pnl for t in closed_trades)
     win_count = sum(1 for t in closed_trades if t.pnl > 0)
     win_rate = (win_count / len(closed_trades) * 100) if closed_trades else 0
+    last_request = request_stats['last_request'].strftime('%Y-%m-%d %H:%M:%S %Z') if request_stats['last_request'] else 'N/A'
     
     return render_template_string(
         HTML_TEMPLATE,
@@ -347,8 +383,20 @@ def dashboard():
         closed_trades=closed_trades,
         total_pnl=total_pnl,
         win_rate=win_rate,
-        win_count=win_count
+        win_count=win_count,
+        request_count=request_stats['count'],
+        last_request_time=last_request,
+        server_start_time=server_start_time.strftime('%Y-%m-%d %H:%M:%S %Z')
     )
+
+@app.route('/api/status')
+def api_status():
+    return jsonify({
+        'online': True,
+        'server_start_time': server_start_time.isoformat(),
+        'requests': request_stats['count'],
+        'last_request_time': request_stats['last_request'].isoformat() if request_stats['last_request'] else None
+    })
 
 @app.route('/api/balance')
 def api_balance():

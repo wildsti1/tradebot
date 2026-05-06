@@ -41,6 +41,68 @@ class Trade:
         self.pnl = pnl
         self.reason = reason
 
+
+def parse_trade_history_item(item):
+    symbol = item.get('symbol') or item.get('epic') or item.get('instrument')
+    direction = item.get('direction') or item.get('tradeDirection') or item.get('positionType')
+    if direction and direction.upper() in ('BUY', 'SELL'):
+        direction = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
+
+    entry_price = item.get('entryPrice') or item.get('openPrice') or item.get('open') or item.get('price')
+    exit_price = item.get('exitPrice') or item.get('closePrice') or item.get('close')
+    pnl = item.get('profit') or item.get('pnl') or item.get('gain') or 0.0
+    reason = item.get('reason') or item.get('closeReason') or item.get('status') or 'history'
+
+    try:
+        entry_price = float(entry_price)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+
+    try:
+        exit_price = float(exit_price)
+    except (TypeError, ValueError):
+        exit_price = 0.0
+
+    try:
+        pnl = float(pnl)
+    except (TypeError, ValueError):
+        pnl = 0.0
+
+    return Trade(symbol or 'UNKNOWN', direction or 'LONG', entry_price, exit_price, pnl, reason)
+
+
+def load_trade_history(client):
+    history = client.get_trade_history()
+    if not history:
+        logger.info('No trade history returned from Capital API.')
+        return
+
+    history_items = []
+    if isinstance(history, dict):
+        for key in ('history', 'trades', 'data', 'positions'):
+            if key in history and isinstance(history[key], list):
+                history_items = history[key]
+                break
+        if not history_items and isinstance(history.get('accounts'), list):
+            history_items = history['accounts']
+    elif isinstance(history, list):
+        history_items = history
+
+    if not history_items:
+        logger.info('Trade history response was empty or unsupported format.')
+        return
+
+    imported = 0
+    for item in history_items:
+        if not isinstance(item, dict):
+            continue
+        trade = parse_trade_history_item(item)
+        closed_trades.append(trade)
+        imported += 1
+
+    logger.info(f'Loaded {imported} historical trades from Capital API.')
+
+
 def main():
     load_dotenv()
 
@@ -101,10 +163,13 @@ def main():
         logger.error("Login failed.")
         return
 
+    load_trade_history(client)
+
     # Start Flask web server in a separate thread
     flask_thread = threading.Thread(target=run_web_server, daemon=True)
     flask_thread.start()
     logger.info("Web server started on http://0.0.0.0:5000")
+    logger.info("Trading bot is online and ready to receive requests.")
 
     watch_pairs = config.get("watch_pairs", [])
     if not watch_pairs:
