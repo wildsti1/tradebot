@@ -211,6 +211,78 @@ HTML_TEMPLATE = """
             color: #ff4444;
             border: 1px solid #ff4444;
         }
+
+        .refresh-hud {
+            position: fixed;
+            right: 14px;
+            bottom: 14px;
+            z-index: 50;
+            width: 260px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.14);
+            backdrop-filter: blur(10px);
+        }
+        .refresh-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 12px;
+            color: rgba(231,234,243,0.85);
+            margin-bottom: 8px;
+        }
+        .refresh-pill {
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(0,212,255,0.35);
+            color: rgba(0,212,255,0.95);
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+        .refresh-bar {
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.10);
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.12);
+        }
+        .refresh-bar > div {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, rgba(0,212,255,0.95), rgba(0,255,136,0.85));
+            border-radius: 999px;
+        }
+
+        .reload-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 60;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(11,16,32,0.70);
+            backdrop-filter: blur(6px);
+        }
+        .reload-card {
+            width: min(420px, calc(100vw - 36px));
+            padding: 18px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(0,212,255,0.28);
+            text-align: center;
+        }
+        .spinner {
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            border: 3px solid rgba(255,255,255,0.18);
+            border-top-color: rgba(0,212,255,0.95);
+            margin: 0 auto 10px;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
         
         @media (max-width: 768px) {
             .grid {
@@ -228,11 +300,61 @@ HTML_TEMPLATE = """
         }
     </style>
     <script>
-        // Auto-refresh every 10 seconds
-        setTimeout(() => location.reload(), 10000);
+        // Auto-refresh every 10 seconds with a small HUD + loading overlay.
+        const REFRESH_MS = 10000;
+        let startedAt = Date.now();
+        let reloadScheduled = false;
+
+        function setHud(remainingMs) {
+            const secs = Math.max(0, Math.ceil(remainingMs / 1000));
+            const pct = Math.min(100, Math.max(0, ((REFRESH_MS - remainingMs) / REFRESH_MS) * 100));
+            const countdown = document.getElementById('refreshCountdown');
+            const bar = document.getElementById('refreshBarFill');
+            if (countdown) countdown.textContent = `${secs}s`;
+            if (bar) bar.style.width = `${pct}%`;
+        }
+
+        function showOverlay() {
+            const overlay = document.getElementById('reloadOverlay');
+            if (overlay) overlay.style.display = 'flex';
+        }
+
+        function tick() {
+            const now = Date.now();
+            const elapsed = now - startedAt;
+            const remaining = REFRESH_MS - elapsed;
+            setHud(remaining);
+            if (!reloadScheduled && remaining <= 250) {
+                reloadScheduled = true;
+                showOverlay();
+                setTimeout(() => location.reload(), 120);
+                return;
+            }
+            requestAnimationFrame(tick);
+        }
+
+        window.addEventListener('load', () => {
+            startedAt = Date.now();
+            setHud(REFRESH_MS);
+            requestAnimationFrame(tick);
+        });
     </script>
 </head>
 <body>
+    <div class="reload-overlay" id="reloadOverlay" aria-hidden="true">
+        <div class="reload-card">
+            <div class="spinner"></div>
+            <div style="font-weight:800; color:#00d4ff; margin-bottom:6px;">Refreshing</div>
+            <div style="font-size:13px; color: rgba(231,234,243,0.78);">Pulling latest balance & positions…</div>
+        </div>
+    </div>
+    <div class="refresh-hud" id="refreshHud">
+        <div class="refresh-row">
+            <div>Auto refresh</div>
+            <div class="refresh-pill" id="refreshCountdown">10s</div>
+        </div>
+        <div class="refresh-bar"><div id="refreshBarFill"></div></div>
+    </div>
     <div class="container">
         <div class="header">
             <h1>📊 TradeBot Dashboard</h1>
