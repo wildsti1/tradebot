@@ -263,13 +263,6 @@ HTML_TEMPLATE = """
                 <div class="card-value">{{ capital_api_last_request }}</div>
                 <div class="card-subtitle">Last Capital API request</div>
             </div>
-
-            <div class="card">
-                <div class="card-title">Watching</div>
-                <div class="card-value">{{ watch_pairs_display }}</div>
-                <div class="card-subtitle">Configured market pairs</div>
-            </div>
-
             <div class="card">
                 <div class="card-title">Latest Spread</div>
                 <div class="card-value">{{ "%.5f"|format(latest_spread) }}</div>
