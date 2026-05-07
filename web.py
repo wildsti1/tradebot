@@ -13,6 +13,7 @@ balance_info = {'balance': 0.0, 'available': 0.0}
 open_positions = {}
 closed_trades = []
 request_stats = {'count': 0, 'last_request': None}
+capital_api_stats = {'count': 0, 'last_request': None}
 server_start_time = datetime.now(SOFIA_TZ)
 
 HTML_TEMPLATE = """
@@ -227,7 +228,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header">
             <h1>📊 TradeBot Dashboard</h1>
-            <p>ConsolidationBreakout Strategy | EURUSD | 1-Minute Candles</p>
+            <p>ConsolidationBreakout Strategy | EURUSD | 15-Minute Candles</p>
         </div>
         
         <div class="grid">
@@ -244,15 +245,15 @@ HTML_TEMPLATE = """
             </div>
             
             <div class="card">
-                <div class="card-title">Request Count</div>
-                <div class="card-value neutral">{{ request_count }}</div>
-                <div class="card-subtitle">Dashboard reloads</div>
+                <div class="card-title">Capital API Calls</div>
+                <div class="card-value neutral">{{ capital_api_count }}</div>
+                <div class="card-subtitle">Broker requests from bot</div>
             </div>
             
             <div class="card">
-                <div class="card-title">Last Request</div>
-                <div class="card-value">{{ last_request_time }}</div>
-                <div class="card-subtitle">Latest request timestamp</div>
+                <div class="card-title">Last API Call</div>
+                <div class="card-value">{{ capital_api_last_request }}</div>
+                <div class="card-subtitle">Last Capital API request</div>
             </div>
             
             <div class="card">
@@ -368,8 +369,9 @@ HTML_TEMPLATE = """
 
 @app.before_request
 def track_request():
-    request_stats['count'] += 1
-    request_stats['last_request'] = datetime.now(SOFIA_TZ)
+    if request.path.startswith('/api/'):
+        request_stats['count'] += 1
+        request_stats['last_request'] = datetime.now(SOFIA_TZ)
     app.logger.info(f"Incoming request: {request.method} {request.path}")
 
 @app.route('/')
@@ -379,6 +381,7 @@ def dashboard():
     win_rate = (win_count / len(closed_trades) * 100) if closed_trades else 0
     last_request = request_stats['last_request'].strftime('%Y-%m-%d %H:%M:%S %Z') if request_stats['last_request'] else 'N/A'
     
+    last_capital_request = capital_api_stats['last_request'].strftime('%Y-%m-%d %H:%M:%S %Z') if capital_api_stats['last_request'] else 'N/A'
     return render_template_string(
         HTML_TEMPLATE,
         balance_info=balance_info,
@@ -388,6 +391,8 @@ def dashboard():
         win_rate=win_rate,
         win_count=win_count,
         request_count=request_stats['count'],
+        capital_api_count=capital_api_stats['count'],
+        capital_api_last_request=last_capital_request,
         last_request_time=last_request,
         server_start_time=server_start_time.strftime('%Y-%m-%d %H:%M:%S %Z')
     )
