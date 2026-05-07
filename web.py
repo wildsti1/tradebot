@@ -15,6 +15,14 @@ closed_trades = []
 request_stats = {'count': 0, 'last_request': None}
 capital_api_stats = {'count': 0, 'last_request': None}
 server_start_time = datetime.now(SOFIA_TZ)
+strategy_name = 'Unknown'
+watch_pairs = []
+
+
+def set_strategy_and_pairs(strategy, pairs):
+    global strategy_name, watch_pairs
+    strategy_name = strategy or 'Unknown'
+    watch_pairs = [p.upper() for p in (pairs or [])]
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -228,7 +236,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header">
             <h1>📊 TradeBot Dashboard</h1>
-            <p>ConsolidationBreakout Strategy | EURUSD | 15-Minute Candles</p>
+            <p>{{ strategy_name }} | Watching: {{ watch_pairs_display }} | 15-Minute Candles</p>
         </div>
         
         <div class="grid">
@@ -245,7 +253,7 @@ HTML_TEMPLATE = """
             </div>
             
             <div class="card">
-                <div class="card-title">Capital API Calls</div>
+                <div class="card-title">API Calls</div>
                 <div class="card-value neutral">{{ capital_api_count }}</div>
                 <div class="card-subtitle">Broker requests from bot</div>
             </div>
@@ -254,6 +262,18 @@ HTML_TEMPLATE = """
                 <div class="card-title">Last API Call</div>
                 <div class="card-value">{{ capital_api_last_request }}</div>
                 <div class="card-subtitle">Last Capital API request</div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Watching</div>
+                <div class="card-value">{{ watch_pairs_display }}</div>
+                <div class="card-subtitle">Configured market pairs</div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Latest Spread</div>
+                <div class="card-value">{{ "%.5f"|format(latest_spread) }}</div>
+                <div class="card-subtitle">Most recent open position spread</div>
             </div>
             
             <div class="card">
@@ -297,6 +317,7 @@ HTML_TEMPLATE = """
                         <th>Direction</th>
                         <th>Size</th>
                         <th>Entry Price</th>
+                        <th>Spread</th>
                         <th>Stop Loss</th>
                         <th>Take Profit</th>
                     </tr>
@@ -312,6 +333,7 @@ HTML_TEMPLATE = """
                         </td>
                         <td>{{ pos.size }}</td>
                         <td>{{ "%.5f"|format(pos.entry_price) }}</td>
+                        <td>{{ "%.5f"|format(pos.spread) }}</td>
                         <td>{{ "%.5f"|format(pos.stop_loss) }}</td>
                         <td>{{ "%.5f"|format(pos.take_profit) }}</td>
                     </tr>
@@ -382,6 +404,8 @@ def dashboard():
     last_request = request_stats['last_request'].strftime('%Y-%m-%d %H:%M:%S %Z') if request_stats['last_request'] else 'N/A'
     
     last_capital_request = capital_api_stats['last_request'].strftime('%Y-%m-%d %H:%M:%S %Z') if capital_api_stats['last_request'] else 'N/A'
+    latest_spread = next((float(pos.spread) for pos in open_positions.values()), 0.0)
+    watch_pairs_display = ', '.join(watch_pairs) if watch_pairs else 'None'
     return render_template_string(
         HTML_TEMPLATE,
         balance_info=balance_info,
@@ -394,6 +418,9 @@ def dashboard():
         capital_api_count=capital_api_stats['count'],
         capital_api_last_request=last_capital_request,
         last_request_time=last_request,
+        latest_spread=latest_spread,
+        watch_pairs_display=watch_pairs_display,
+        strategy_name=strategy_name,
         server_start_time=server_start_time.strftime('%Y-%m-%d %H:%M:%S %Z')
     )
 

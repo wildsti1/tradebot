@@ -25,7 +25,7 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 from utils.capital_api import CapitalClient
 import user_data.strategies.harmonic_strategy as harmonic_module
 import user_data.strategies.consolidation_breakout_strategy as breakout_module
-from web import app, run_web_server, balance_info, open_positions, closed_trades, capital_api_stats
+from web import app, run_web_server, balance_info, open_positions, closed_trades, capital_api_stats, set_strategy_and_pairs
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -36,6 +36,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+TRADE_LOG_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "user_data", "logs", "trades")
+
+def ensure_trade_log_dir():
+    if not os.path.exists(TRADE_LOG_DIR):
+        os.makedirs(TRADE_LOG_DIR, exist_ok=True)
+
+
+def write_trade_log(event_type, data):
+    ensure_trade_log_dir()
+    timestamp = datetime.now(SOFIA_TZ).strftime("%Y%m%d_%H%M%S")
+    symbol = data.get('symbol', 'unknown').replace('/', '_')
+    filename = f"trade_{event_type.lower()}_{symbol}_{timestamp}.json"
+    file_path = os.path.join(TRADE_LOG_DIR, filename)
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'event_type': event_type,
+                'timestamp': datetime.now(SOFIA_TZ).isoformat(),
+                'data': data
+            }, f, indent=4)
+        logger.info(f"Trade log saved: {file_path}")
+    except Exception as e:
+        logger.error(f"Failed to write trade log {file_path}: {e}")
+
 # --- Helper Classes & Functions ---
 
 def clamp(value, min_value, max_value):
@@ -44,6 +68,45 @@ def clamp(value, min_value, max_value):
 def track_capital_api_request():
     capital_api_stats['count'] += 1
     capital_api_stats['last_request'] = datetime.now(SOFIA_TZ)
+
+
+def get_dynamic_spread_from_prices(prices):
+    """Calculate spread from the latest price bar returned by the API."""
+    try:
+        data = prices['prices'] if isinstance(prices, dict) and 'prices' in prices else prices
+        last = data[-1]
+        close_price = last.get('closePrice') or last.get('Close')
+        if not isinstance(close_price, dict):
+            return None
+
+        ask = close_price.get('ask') or close_price.get('Ask')
+        bid = close_price.get('bid') or close_price.get('Bid')
+        if ask is None or bid is None:
+            return None
+
+        return abs(float(ask) - float(bid))
+    except Exception:
+        return None
+
+
+def get_effective_entry_price(prices, direction):
+    """Return current ask for BUY or bid for SELL."""
+    try:
+        data = prices['prices'] if isinstance(prices, dict) and 'prices' in prices else prices
+        last = data[-1]
+        close_price = last.get('closePrice') or last.get('Close')
+        if not isinstance(close_price, dict):
+            return None
+
+        ask = close_price.get('ask') or close_price.get('Ask')
+        bid = close_price.get('bid') or close_price.get('Bid')
+        if direction == 'BUY' and ask is not None:
+            return float(ask)
+        if direction == 'SELL' and bid is not None:
+            return float(bid)
+        return None
+    except Exception:
+        return None
 
 
 def calc_size_from_risk(balance, entry_price, stop_level, risk_pct, min_size, max_size):
@@ -67,7 +130,7 @@ def calc_size_from_risk(balance, entry_price, stop_level, risk_pct, min_size, ma
         return None
 
 class Position:
-    def __init__(self, symbol, direction, size, entry_price, stop_loss, take_profit, deal_id):
+    def __init__(self, symbol, direction, size, entry_price, stop_loss, take_profit, deal_id, spread=0.0):
         self.symbol = symbol
         self.direction = direction
         self.size = size
@@ -75,6 +138,7 @@ class Position:
         self.stop_loss = stop_loss
         self.take_profit = take_profit
         self.deal_id = deal_id
+        self.spread = spread or 0.0
 
 class Trade:
     def __init__(self, symbol, direction, entry_price, exit_price, pnl, reason):
@@ -127,7 +191,7 @@ def main():
         config_path = os.path.join(root_dir, "config.json")
         defaults = {
             "selected_strategy": "ConsolidationBreakoutStrategy",
-            "watch_pairs": ["BTCUSD"],
+            "watch_pairs": ["EURUSD", "AUDUSD"],
             "risk": {"risk_per_trade_pct": 30.0, "min_size": 0.001, "max_size": 1.0}
         }
         if not os.path.exists(config_path):
@@ -161,6 +225,7 @@ def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     
     watch_pairs = [p.upper() for p in config.get("watch_pairs", [])]
+    set_strategy_and_pairs(strategy_name, watch_pairs)
     risk_cfg = config.get("risk", {})
     risk_pct = float(risk_cfg.get("risk_per_trade_pct", 1.0))
     min_sz, max_sz = float(risk_cfg.get("min_size", 0.01)), float(risk_cfg.get("max_size", 1.0))
@@ -188,20 +253,63 @@ def main():
                 if signal.get('signal') == 'OPEN_POSITION':
                     direction = 'BUY' if signal['direction'] == 'LONG' else 'SELL'
                     entry, sl, tp = signal['entry_price'], signal['stop_loss'], signal['take_profit']
-                    
-                    size = calc_size_from_risk(balance_info['available'], entry, sl, risk_pct, min_sz, max_sz)
-                    
+
+                    effective_entry = get_effective_entry_price(prices, direction) or entry
+                    current_spread = get_dynamic_spread_from_prices(prices) or 0.0
+                    size = calc_size_from_risk(balance_info['available'], effective_entry, sl, risk_pct, min_sz, max_sz)
+                    if size is None:
+                        logger.warning(f"Invalid position size for {symbol} | entry={effective_entry} sl={sl}")
+                        continue
+
                     track_capital_api_request()
                     res = client.open_position(symbol, direction, size, sl, tp)
                     if res and 'dealReference' in res:
-                        open_positions[symbol] = Position(symbol, signal['direction'], size, entry, sl, tp, res['dealReference'])
-                        logger.info(f"🚀 {direction} {symbol} | Size: {size} | SL: {sl}")
+                        open_positions[symbol] = Position(
+                            symbol,
+                            signal['direction'],
+                            size,
+                            effective_entry,
+                            sl,
+                            tp,
+                            res['dealReference'],
+                            spread=current_spread
+                        )
+                        log_data = {
+                            'symbol': symbol,
+                            'direction': signal['direction'],
+                            'order_type': direction,
+                            'size': size,
+                            'entry_price': effective_entry,
+                            'stop_loss': sl,
+                            'take_profit': tp,
+                            'spread': current_spread,
+                            'deal_id': res['dealReference'],
+                            'balance_available': balance_info.get('available', 0),
+                            'risk_pct': risk_pct,
+                            'api_response': res
+                        }
+                        write_trade_log('OPEN_POSITION', log_data)
+                        logger.info(
+                            f"🚀 {direction} {symbol} | Size: {size} | Entry: {effective_entry} | Spread: {current_spread:.5f} | SL: {sl}"
+                        )
 
                 elif signal.get('signal') == 'CLOSE_POSITION' and symbol in open_positions:
                     pos = open_positions[symbol]
                     track_capital_api_request()
-                    if client.close_position(pos.deal_id):
+                    close_res = client.close_position(pos.deal_id)
+                    if close_res:
                         logger.info(f"💰 Closed {symbol} | Reason: {signal.get('reason')}")
+                        write_trade_log('CLOSE_POSITION', {
+                            'symbol': pos.symbol,
+                            'direction': pos.direction,
+                            'deal_id': pos.deal_id,
+                            'entry_price': pos.entry_price,
+                            'exit_reason': signal.get('reason'),
+                            'stop_loss': pos.stop_loss,
+                            'take_profit': pos.take_profit,
+                            'spread': pos.spread,
+                            'api_response': close_res
+                        })
                         del open_positions[symbol]
 
             time.sleep(LOOP_INTERVAL_SEC)

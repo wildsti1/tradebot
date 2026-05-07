@@ -11,7 +11,7 @@ import numpy as np
 # end_hour: end hour for trading (19 = 19:00).
 # cost_per_trade: commission per trade.
 DEFAULT_LOOKBACK = 10
-DEFAULT_CONSOLIDATION_PCT = 0.2
+DEFAULT_CONSOLIDATION_PCT = 0.5
 DEFAULT_TP_SL_PCT = 0.5
 DEFAULT_START_HOUR = 0
 DEFAULT_END_HOUR = 23
