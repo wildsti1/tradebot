@@ -3,7 +3,9 @@
   "watch_pairs": [
     "EURUSD",
     "AUDUSD",
-    "GBPUSD"
+    "GBPUSD",
+    "BTCUSD",
+    "USDJPY"
   ],
   "risk_pct": 0.15
 }
