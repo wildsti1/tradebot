@@ -16,7 +16,7 @@ SOFIA_TZ = ZoneInfo('Europe/Sofia')
 DEFAULT_TIMEFRAME = '15MINUTE'     # Options: 'MINUTE', '5MINUTE', '15MINUTE', 'HOUR', 'DAY'
 PRICE_COUNT = 100             # Bars to fetch (Strategy lookback needs at least 10-20)
 LOOP_INTERVAL_SEC = 60        # Seconds to wait between market checks
-IS_DEMO = True                # Set to False for REAL account trading
+# NOTE: Demo / live mode is controlled by environment or config, not this file.
 # ==========================================================
 
 # Path setup
@@ -64,6 +64,13 @@ def write_trade_log(event_type, data):
 
 def clamp(value, min_value, max_value):
     return max(min_value, min(max_value, value))
+
+
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+
 
 def track_capital_api_request():
     capital_api_stats['count'] += 1
@@ -209,11 +216,17 @@ def main():
     strategy = strategy_map.get(strategy_name, breakout_module.ConsolidationBreakoutStrategy)()
     logger.info(f"Initialized Strategy: {strategy_name} | Timeframe: {DEFAULT_TIMEFRAME}")
 
+    demo_mode = os.getenv("CAPITAL_DEMO")
+    if demo_mode is None:
+        demo_mode = config.get("demo")
+    is_demo = parse_bool(demo_mode, default=True)
+    logger.info(f"Running in {'DEMO' if is_demo else 'LIVE'} mode")
+
     client = CapitalClient(
         os.getenv("CAPITAL_API_KEY"),
         os.getenv("CAPITAL_IDENTIFIER"),
         os.getenv("CAPITAL_PASSWORD"),
-        demo=IS_DEMO
+        demo=is_demo
     )
 
     track_capital_api_request()
