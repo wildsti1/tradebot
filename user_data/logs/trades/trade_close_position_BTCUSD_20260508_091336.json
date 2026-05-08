@@ -1,0 +1,17 @@
+{
+    "event_type": "CLOSE_POSITION",
+    "timestamp": "2026-05-08T09:13:36.984751+03:00",
+    "data": {
+        "symbol": "BTCUSD",
+        "direction": "SHORT",
+        "deal_id": "o_435ac9f2-a69e-41eb-b566-e6fc0c606841",
+        "entry_price": 79521.8,
+        "exit_reason": "Take Profit",
+        "stop_loss": 79945.79025,
+        "take_profit": 79150.30975,
+        "spread": 52.5,
+        "api_response": {
+            "errorCode": "error.invalid.dealId"
+        }
+    }
+}

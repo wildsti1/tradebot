@@ -1,0 +1,20 @@
+{
+    "event_type": "OPEN_POSITION",
+    "timestamp": "2026-05-08T09:10:27.981830+03:00",
+    "data": {
+        "symbol": "BTCUSD",
+        "direction": "SHORT",
+        "order_type": "SELL",
+        "size": 0.02367,
+        "entry_price": 79464.65,
+        "stop_loss": 79887.09825,
+        "take_profit": 79092.20175,
+        "spread": 50.0,
+        "deal_id": "o_31efe315-ad23-466c-a812-723aaa65b804",
+        "balance_available": 1000.0,
+        "risk_pct": 1.0,
+        "api_response": {
+            "dealReference": "o_31efe315-ad23-466c-a812-723aaa65b804"
+        }
+    }
+}

@@ -115,6 +115,32 @@ def get_effective_entry_price(prices, direction):
     except Exception:
         return None
 
+def get_effective_exit_price(prices, position_direction):
+    """
+    Exit price uses the opposite side of the spread:
+      - LONG exits at bid (SELL)
+      - SHORT exits at ask (BUY)
+    """
+    try:
+        data = prices['prices'] if isinstance(prices, dict) and 'prices' in prices else prices
+        last = data[-1]
+        close_price = last.get('closePrice') or last.get('Close')
+        if not isinstance(close_price, dict):
+            return None
+
+        ask = close_price.get('ask') or close_price.get('Ask')
+        bid = close_price.get('bid') or close_price.get('Bid')
+        if position_direction == 'LONG' and bid is not None:
+            return float(bid)
+        if position_direction == 'SHORT' and ask is not None:
+            return float(ask)
+        return None
+    except Exception:
+        return None
+
+def is_capital_api_error(response):
+    return isinstance(response, dict) and bool(response.get("errorCode"))
+
 
 def calc_size_from_risk(balance, entry_price, stop_level, risk_pct, min_size, max_size):
     """Calculates position size based on balance and stop distance."""
@@ -172,7 +198,9 @@ def parse_trade_history_item(item):
 def load_trade_history(client):
     track_capital_api_request()
     history = client.get_trade_history()
-    if not history: return
+    if not history:
+        logger.info("Trade history not loaded (disabled or unavailable).")
+        return
     
     items = []
     if isinstance(history, dict):
@@ -192,6 +220,7 @@ def load_trade_history(client):
 
 def main():
     load_dotenv()
+    strategy_debug = os.getenv("TRADEBOT_STRATEGY_DEBUG", "0") == "1"
 
     def load_config():
         root_dir = os.path.dirname(os.path.realpath(__file__))
@@ -260,7 +289,10 @@ def main():
                 if not prices: continue
 
                 signal = strategy.analyze(prices)
-                if not isinstance(signal, dict): continue
+                if not isinstance(signal, dict):
+                    if strategy_debug and getattr(strategy, "last_debug", None):
+                        logger.info(f"Analysis complete. Market: {symbol} | Signal: None | Debug: {strategy.last_debug}")
+                    continue
 
                 # --- Execute Signal ---
                 if signal.get('signal') == 'OPEN_POSITION':
@@ -308,22 +340,47 @@ def main():
 
                 elif signal.get('signal') == 'CLOSE_POSITION' and symbol in open_positions:
                     pos = open_positions[symbol]
+                    exit_price = get_effective_exit_price(prices, pos.direction) or pos.entry_price
+                    exit_spread = get_dynamic_spread_from_prices(prices) or 0.0
+
                     track_capital_api_request()
                     close_res = client.close_position(pos.deal_id)
-                    if close_res:
-                        logger.info(f"💰 Closed {symbol} | Reason: {signal.get('reason')}")
+                    if close_res and not is_capital_api_error(close_res):
+                        # PnL estimate using side-correct entry/exit prices; this already includes spread impact.
+                        pnl = (exit_price - pos.entry_price) * pos.size if pos.direction == 'LONG' else (pos.entry_price - exit_price) * pos.size
+                        spread_cost_est = None
+                        try:
+                            # Optional breakdown: half-spread on entry + half-spread on exit.
+                            spread_cost_est = ((float(pos.spread) / 2.0) + (float(exit_spread) / 2.0)) * float(pos.size)
+                        except Exception:
+                            spread_cost_est = None
+
+                        closed_trades.append(Trade(pos.symbol, pos.direction, pos.entry_price, exit_price, pnl, signal.get('reason')))
+
+                        logger.info(
+                            f"💰 Closed {symbol} | Reason: {signal.get('reason')} | Exit: {exit_price} | "
+                            f"PnL(est): {pnl:.4f} | Spread(entry/exit): {pos.spread:.5f}/{exit_spread:.5f}"
+                        )
                         write_trade_log('CLOSE_POSITION', {
                             'symbol': pos.symbol,
                             'direction': pos.direction,
                             'deal_id': pos.deal_id,
                             'entry_price': pos.entry_price,
+                            'exit_price': exit_price,
+                            'pnl_estimate': pnl,
                             'exit_reason': signal.get('reason'),
                             'stop_loss': pos.stop_loss,
                             'take_profit': pos.take_profit,
-                            'spread': pos.spread,
+                            'spread_entry': pos.spread,
+                            'spread_exit': exit_spread,
+                            'spread_cost_estimate': spread_cost_est,
                             'api_response': close_res
                         })
                         del open_positions[symbol]
+                    elif close_res and is_capital_api_error(close_res):
+                        logger.warning(f"Failed to close {symbol} deal_id={pos.deal_id} errorCode={close_res.get('errorCode')} details={close_res}")
+                    else:
+                        logger.warning(f"Failed to close {symbol} deal_id={pos.deal_id} (no response)")
 
             time.sleep(LOOP_INTERVAL_SEC)
 

@@ -55,13 +55,68 @@ class CapitalClient:
     def get_prices(self, epic, resolution='MINUTE', count=10):
         """Fetches historical price data."""
         url = f"{self.base_url}/prices/{epic}"
+        resolution = (resolution or 'MINUTE')
+        res_key = str(resolution).strip().upper().replace(' ', '')
+        resolution_map = {
+            # Friendly aliases used in main.py / configs
+            '1MINUTE': 'MINUTE',
+            'MINUTE': 'MINUTE',
+            '5MINUTE': 'MINUTE_5',
+            '15MINUTE': 'MINUTE_15',
+            '30MINUTE': 'MINUTE_30',
+            'HOUR': 'HOUR',
+            'DAY': 'DAY',
+            # Already-in-API-format
+            'MINUTE_5': 'MINUTE_5',
+            'MINUTE_15': 'MINUTE_15',
+            'MINUTE_30': 'MINUTE_30',
+        }
+        normalized_resolution = resolution_map.get(res_key, resolution)
         params = {
-            "resolution": resolution,
+            "resolution": normalized_resolution,
             "max": count
         }
         try:
+            debug_prices = os.getenv("TRADEBOT_PRICE_DEBUG", "0") == "1"
             response = requests.get(url, headers=self.headers, params=params)
-            return response.json()
+            if response.status_code != 200:
+                logging.warning(
+                    f"Prices request for {epic} returned {response.status_code}: {response.text} "
+                    f"(resolution={normalized_resolution})"
+                )
+                return None
+            data = response.json()
+            # Some error responses still return 200 with errorCode; guard anyway.
+            if isinstance(data, dict) and data.get("errorCode"):
+                logging.warning(f"Prices response for {epic} contained errorCode={data.get('errorCode')}: {data}")
+                return None
+            if debug_prices:
+                try:
+                    if isinstance(data, dict):
+                        keys = list(data.keys())
+                        sample_prices = data.get("prices")
+                        if isinstance(sample_prices, list) and sample_prices:
+                            sample_prices = sample_prices[:1]
+                        logging.info(
+                            "Prices debug | epic=%s resolution=%s count=%s keys=%s sample=%s",
+                            epic,
+                            resolution,
+                            count,
+                            keys[:30],
+                            json.dumps({"prices": sample_prices}, default=str)[:1200],
+                        )
+                    else:
+                        logging.info(
+                            "Prices debug | epic=%s resolution=%s count=%s type=%s sample=%s",
+                            epic,
+                            resolution,
+                            count,
+                            type(data).__name__,
+                            json.dumps(data, default=str)[:1200],
+                        )
+                except Exception as e:
+                    logging.info(f"Prices debug logging failed for {epic}: {e}")
+            return data
         except Exception as e:
             logging.error(f"Error fetching prices: {str(e)}")
             return None
@@ -89,14 +144,29 @@ class CapitalClient:
     def get_trade_history(self, endpoint=None, params=None):
         """Fetches trade history or closed positions from Capital API."""
         if endpoint is None:
-            endpoint = os.getenv("CAPITAL_TRADE_HISTORY_ENDPOINT", "/positions/history")
+            # Disabled by default because Capital endpoints differ by account/product and
+            # some require a dealId (which would otherwise log noisy 400s on startup).
+            endpoint = os.getenv("CAPITAL_TRADE_HISTORY_ENDPOINT", "").strip()
+
+        if not endpoint:
+            return None
 
         url = endpoint if endpoint.startswith("http") else f"{self.base_url}{endpoint}"
         try:
+            debug_history = os.getenv("TRADEBOT_TRADE_HISTORY_DEBUG", "0") == "1"
             response = requests.get(url, headers=self.headers, params=params)
             if response.status_code == 200:
                 return response.json()
-            logging.warning(f"Trade history request returned {response.status_code}: {response.text}")
+            if debug_history:
+                logging.warning(
+                    "Trade history debug | url=%s params=%s status=%s body=%s",
+                    url,
+                    params,
+                    response.status_code,
+                    (response.text or "")[:2000],
+                )
+            else:
+                logging.warning(f"Trade history request to {url} returned {response.status_code}: {response.text}")
             return None
         except Exception as e:
             logging.error(f"Error fetching trade history from {url}: {str(e)}")
