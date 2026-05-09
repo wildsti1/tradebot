@@ -7,6 +7,7 @@ import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+import inspect
 
 SOFIA_TZ = ZoneInfo('Europe/Sofia')
 
@@ -23,7 +24,7 @@ LOOP_INTERVAL_SEC = 60        # Seconds to wait between market checks
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 from utils.capital_api import CapitalClient
-import user_data.strategies.harmonic_strategy as harmonic_module
+# import user_data.strategies.harmonic_strategy as harmonic_module
 import user_data.strategies.consolidation_breakout_strategy as breakout_module
 from web import app, run_web_server, balance_info, open_positions, closed_trades, capital_api_stats, set_strategy_and_pairs
 from datetime import datetime
@@ -141,6 +142,150 @@ def get_effective_exit_price(prices, position_direction):
 def is_capital_api_error(response):
     return isinstance(response, dict) and bool(response.get("errorCode"))
 
+def _to_float_or_none(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+def _deep_find_first(obj, wanted_keys, max_nodes=2000):
+    """
+    Breadth-first search through dict/list payloads to find the first value for any key in wanted_keys.
+    Returns the raw value (not coerced).
+    """
+    if obj is None:
+        return None
+    wanted = set(wanted_keys)
+    queue = [obj]
+    seen = 0
+    while queue and seen < max_nodes:
+        current = queue.pop(0)
+        seen += 1
+        if isinstance(current, dict):
+            for k, v in current.items():
+                if k in wanted and v is not None:
+                    return v
+                if isinstance(v, (dict, list)):
+                    queue.append(v)
+        elif isinstance(current, list):
+            for v in current:
+                if isinstance(v, (dict, list)):
+                    queue.append(v)
+    return None
+
+def parse_capital_positions(payload):
+    """
+    Best-effort parser for Capital.com /positions response.
+    Returns dict keyed by symbol/epic with normalized fields.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    items = payload.get("positions")
+    if not isinstance(items, list):
+        return {}
+
+    parsed = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        market = item.get("market") if isinstance(item.get("market"), dict) else {}
+        pos = item.get("position") if isinstance(item.get("position"), dict) else item
+
+        symbol = (market.get("epic") or item.get("epic") or item.get("symbol"))
+        if not symbol:
+            continue
+
+        raw_dir = (pos.get("direction") or item.get("direction") or _deep_find_first(item, ["direction"]))
+        direction = None
+        if isinstance(raw_dir, str):
+            d = raw_dir.strip().upper()
+            if d == "BUY":
+                direction = "LONG"
+            elif d == "SELL":
+                direction = "SHORT"
+            elif d in ("LONG", "SHORT"):
+                direction = d
+
+        size = _to_float_or_none(
+            pos.get("size")
+            or item.get("size")
+            or _deep_find_first(item, ["size"])
+        ) or 0.0
+        entry_price = _to_float_or_none(
+            pos.get("level")
+            or pos.get("openLevel")
+            or item.get("level")
+            or item.get("openLevel")
+            or _deep_find_first(item, ["level", "openLevel", "openPrice"])
+        ) or 0.0
+        stop_loss = _to_float_or_none(
+            pos.get("stopLevel")
+            or item.get("stopLevel")
+            or _deep_find_first(item, ["stopLevel", "stopLossLevel"])
+        )
+        take_profit = _to_float_or_none(
+            pos.get("limitLevel")
+            or item.get("limitLevel")
+            or _deep_find_first(item, ["limitLevel", "takeProfitLevel", "takeProfit", "tpLevel"])
+        )
+        deal_id = (
+            pos.get("dealId")
+            or item.get("dealId")
+            or _deep_find_first(item, ["dealId"])
+            or pos.get("dealReference")
+            or item.get("dealReference")
+            or _deep_find_first(item, ["dealReference"])
+        )
+
+        parsed[symbol] = Position(
+            symbol=symbol,
+            direction=direction or "LONG",
+            size=size,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            deal_id=deal_id,
+            spread=0.0,
+        )
+
+    return parsed
+
+def sync_open_positions_from_broker(client):
+    """
+    Keeps UI state aligned with broker state, including broker-closed positions (TP/SL).
+    """
+    track_capital_api_request()
+    payload = client.get_positions()
+    if not payload or is_capital_api_error(payload):
+        return
+
+    if os.getenv("TRADEBOT_POSITIONS_DEBUG", "0") == "1":
+        try:
+            if isinstance(payload, dict):
+                sample = None
+                if isinstance(payload.get("positions"), list) and payload["positions"]:
+                    sample = payload["positions"][0]
+                logger.info(
+                    "Positions debug | keys=%s sample=%s",
+                    list(payload.keys())[:40],
+                    json.dumps(sample, default=str)[:1200],
+                )
+            else:
+                logger.info("Positions debug | type=%s sample=%s", type(payload).__name__, str(payload)[:1200])
+        except Exception as e:
+            logger.info("Positions debug logging failed: %s", e)
+
+    broker_positions = parse_capital_positions(payload)
+    # Drop positions that disappeared on the broker (closed externally / by TP/SL)
+    for symbol in list(open_positions.keys()):
+        if symbol not in broker_positions:
+            del open_positions[symbol]
+    # Add/update positions that exist on the broker
+    for symbol, pos in broker_positions.items():
+        open_positions[symbol] = pos
+
 
 def calc_size_from_risk(balance, entry_price, stop_level, risk_pct, min_size, max_size):
     """Calculates position size based on balance and stop distance."""
@@ -221,6 +366,9 @@ def load_trade_history(client):
 def main():
     load_dotenv()
     strategy_debug = os.getenv("TRADEBOT_STRATEGY_DEBUG", "0") == "1"
+    order_debug = os.getenv("TRADEBOT_ORDER_DEBUG", "0") == "1"
+    positions_sync_interval_sec = int(os.getenv("TRADEBOT_POSITIONS_SYNC_SEC", "15") or 15)
+    last_positions_sync_ts = 0.0
 
     def load_config():
         root_dir = os.path.dirname(os.path.realpath(__file__))
@@ -237,12 +385,53 @@ def main():
 
     config = load_config()
     strategy_map = {
-        "HarmonicStrategy": harmonic_module.HarmonicStrategy,
+        # "HarmonicStrategy": harmonic_module.HarmonicStrategy,
         "ConsolidationBreakoutStrategy": breakout_module.ConsolidationBreakoutStrategy,
     }
     
     strategy_name = config.get("selected_strategy")
-    strategy = strategy_map.get(strategy_name, breakout_module.ConsolidationBreakoutStrategy)()
+    strategy_cls = strategy_map.get(strategy_name, breakout_module.ConsolidationBreakoutStrategy)
+
+    def _filter_init_kwargs(cls, kwargs):
+        if not isinstance(kwargs, dict):
+            return {}
+        try:
+            sig = inspect.signature(cls.__init__)
+            allowed = {p.name for p in sig.parameters.values() if p.name not in ("self", "args", "kwargs")}
+            return {k: v for k, v in kwargs.items() if k in allowed}
+        except Exception:
+            return dict(kwargs)
+
+    def _strategy_params_for(symbol):
+        """
+        Optional per-pair strategy params in config.json:
+
+        {
+          "selected_strategy": "ConsolidationBreakoutStrategy",
+          "strategy_params": {
+            "ConsolidationBreakoutStrategy": {
+              "default": {"tp_sl_pct": 0.5, "lookback": 10},
+              "pairs": {"BTCUSD": {"tp_sl_pct": 1.0}}
+            }
+          }
+        }
+        """
+        all_params = config.get("strategy_params", {})
+        strat_params = all_params.get(strategy_name) if isinstance(all_params, dict) else None
+        if not isinstance(strat_params, dict):
+            return {}
+        default_params = strat_params.get("default", {})
+        pairs = strat_params.get("pairs", {})
+        pair_params = pairs.get(symbol, {}) if isinstance(pairs, dict) else {}
+        merged = {}
+        if isinstance(default_params, dict):
+            merged.update(default_params)
+        if isinstance(pair_params, dict):
+            merged.update(pair_params)
+        return _filter_init_kwargs(strategy_cls, merged)
+
+    # Separate strategy instance per symbol so each pair can keep its own state and params.
+    strategies_by_symbol = {}
     logger.info(f"Initialized Strategy: {strategy_name} | Timeframe: {DEFAULT_TIMEFRAME}")
 
     demo_mode = os.getenv("CAPITAL_DEMO")
@@ -269,8 +458,30 @@ def main():
     watch_pairs = [p.upper() for p in config.get("watch_pairs", [])]
     set_strategy_and_pairs(strategy_name, watch_pairs)
     risk_cfg = config.get("risk", {})
-    risk_pct = float(risk_cfg.get("risk_per_trade_pct", 1.0))
-    min_sz, max_sz = float(risk_cfg.get("min_size", 0.01)), float(risk_cfg.get("max_size", 1.0))
+    # Support both config formats:
+    # - New: {"risk": {"risk_per_trade_pct": 15, "min_size": 0.001, "max_size": 1.0}}
+    # - Legacy/simple: {"risk_pct": 0.15} (fraction) or {"risk_pct": 15} (percent)
+    if not isinstance(risk_cfg, dict):
+        risk_cfg = {}
+
+    raw_risk = None
+    if "risk_per_trade_pct" in risk_cfg:
+        raw_risk = risk_cfg.get("risk_per_trade_pct")
+    elif "risk_pct" in config:
+        raw_risk = config.get("risk_pct")
+    else:
+        raw_risk = 1.0
+
+    try:
+        raw_risk = float(raw_risk)
+    except Exception:
+        raw_risk = 1.0
+
+    # If user supplies 0 < risk <= 1, treat it as fraction of balance (0.15 => 15%).
+    risk_pct = (raw_risk * 100.0) if (0 < raw_risk <= 1.0) else raw_risk
+
+    min_sz = float(risk_cfg.get("min_size", 0.01))
+    max_sz = float(risk_cfg.get("max_size", 1.0))
 
     while True:
         try:
@@ -282,8 +493,21 @@ def main():
                 balance_info['balance'] = float(acc['balance'].get('balance', 0))
                 balance_info['available'] = float(acc['balance'].get('available', 0))
 
+            # 1b. Sync positions from broker (handles broker-closed positions)
+            now_ts = time.time()
+            if positions_sync_interval_sec > 0 and (now_ts - last_positions_sync_ts) >= positions_sync_interval_sec:
+                sync_open_positions_from_broker(client)
+                last_positions_sync_ts = now_ts
+
             # 2. Iterate Pairs
             for symbol in watch_pairs:
+                if symbol not in strategies_by_symbol:
+                    params = _strategy_params_for(symbol)
+                    strategies_by_symbol[symbol] = strategy_cls(**params)
+                    if params:
+                        logger.info(f"Strategy params for {symbol}: {params}")
+
+                strategy = strategies_by_symbol[symbol]
                 track_capital_api_request()
                 prices = client.get_prices(symbol, count=PRICE_COUNT, resolution=DEFAULT_TIMEFRAME)
                 if not prices: continue
@@ -297,18 +521,88 @@ def main():
                 # --- Execute Signal ---
                 if signal.get('signal') == 'OPEN_POSITION':
                     direction = 'BUY' if signal['direction'] == 'LONG' else 'SELL'
-                    entry, sl, tp = signal['entry_price'], signal['stop_loss'], signal['take_profit']
+                    entry = signal.get('entry_price')
+                    sl = signal.get('stop_loss')
+                    tp = signal.get('take_profit')
+                    if entry is None or sl is None:
+                        logger.warning(f"Invalid trade plan for {symbol}: missing entry_price/stop_loss | signal={signal}")
+                        continue
 
                     effective_entry = get_effective_entry_price(prices, direction) or entry
                     current_spread = get_dynamic_spread_from_prices(prices) or 0.0
+
+                    # Strategies typically compute TP/SL around a mid/last close.
+                    # The broker fills at bid/ask, so recompute absolute levels around the effective entry
+                    # while preserving the strategy's intended distances.
+                    try:
+                        entry_f = float(entry)
+                        effective_entry_f = float(effective_entry)
+                        sl_f = float(sl)
+                        stop_dist = abs(entry_f - sl_f)
+                        tp_dist = abs(float(tp) - entry_f) if tp is not None else None
+                        if signal.get('direction') == 'LONG':
+                            sl = round(effective_entry_f - stop_dist, 8)
+                            if tp_dist is not None:
+                                tp = round(effective_entry_f + tp_dist, 8)
+                        else:
+                            sl = round(effective_entry_f + stop_dist, 8)
+                            if tp_dist is not None:
+                                tp = round(effective_entry_f - tp_dist, 8)
+                    except Exception:
+                        pass
+
                     size = calc_size_from_risk(balance_info['available'], effective_entry, sl, risk_pct, min_sz, max_sz)
                     if size is None:
                         logger.warning(f"Invalid position size for {symbol} | entry={effective_entry} sl={sl}")
                         continue
 
+                    if order_debug:
+                        try:
+                            logger.info(
+                                "Order plan | %s %s | entry(strategy)=%.8f entry(effective)=%.8f spread=%.5f | "
+                                "SL=%.8f TP=%s | risk_pct=%.4f available=%.2f size=%.5f",
+                                direction,
+                                symbol,
+                                float(entry),
+                                float(effective_entry),
+                                float(current_spread),
+                                float(sl),
+                                ("%.8f" % float(tp)) if tp is not None else "None",
+                                float(risk_pct),
+                                float(balance_info.get("available", 0)),
+                                float(size),
+                            )
+                        except Exception:
+                            logger.info("Order plan | %s %s | entry=%s effective_entry=%s SL=%s TP=%s size=%s risk_pct=%s",
+                                        direction, symbol, entry, effective_entry, sl, tp, size, risk_pct)
+
                     track_capital_api_request()
                     res = client.open_position(symbol, direction, size, sl, tp)
                     if res and 'dealReference' in res:
+                        deal_ref = res.get('dealReference')
+                        deal_id = deal_ref
+                        try:
+                            track_capital_api_request()
+                            conf = client.get_confirmation(deal_ref)
+                            if isinstance(conf, dict) and conf.get("dealId"):
+                                deal_id = conf.get("dealId")
+                            if order_debug and isinstance(conf, dict):
+                                try:
+                                    logger.info(
+                                        "Order confirm | %s %s | dealId=%s status=%s reason=%s | stopLevel=%s limitLevel=%s",
+                                        direction,
+                                        symbol,
+                                        conf.get("dealId") or deal_id,
+                                        conf.get("dealStatus") or conf.get("status"),
+                                        conf.get("reason"),
+                                        conf.get("stopLevel"),
+                                        conf.get("limitLevel"),
+                                    )
+                                except Exception:
+                                    logger.info("Order confirm | %s %s | %s", direction, symbol, str(conf)[:800])
+                        except Exception:
+                            deal_id = deal_ref
+
                         open_positions[symbol] = Position(
                             symbol,
                             signal['direction'],
@@ -316,7 +610,7 @@ def main():
                             effective_entry,
                             sl,
                             tp,
-                            res['dealReference'],
+                            deal_id,
                             spread=current_spread
                         )
                         log_data = {
@@ -328,7 +622,8 @@ def main():
                             'stop_loss': sl,
                             'take_profit': tp,
                             'spread': current_spread,
-                            'deal_id': res['dealReference'],
+                            'deal_id': deal_id,
+                            'deal_reference': deal_ref,
                             'balance_available': balance_info.get('available', 0),
                             'risk_pct': risk_pct,
                             'api_response': res
@@ -377,6 +672,8 @@ def main():
                             'api_response': close_res
                         })
                         del open_positions[symbol]
+                        # Ensure UI stays in sync even if broker closed additional legs/positions.
+                        sync_open_positions_from_broker(client)
                     elif close_res and is_capital_api_error(close_res):
                         logger.warning(f"Failed to close {symbol} deal_id={pos.deal_id} errorCode={close_res.get('errorCode')} details={close_res}")
                     else:

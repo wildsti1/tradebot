@@ -131,14 +131,28 @@ HTML_TEMPLATE = """
             letter-spacing: 1px;
         }
         
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-        }
+	        table {
+	            width: 100%;
+	            border-collapse: collapse;
+	            background: rgba(255, 255, 255, 0.05);
+	            border-radius: 8px;
+	            overflow: hidden;
+	            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+	            min-width: 720px;
+	        }
+
+	        .table-wrap {
+	            width: 100%;
+	            overflow-x: auto;
+	            -webkit-overflow-scrolling: touch;
+	            border-radius: 8px;
+	        }
+
+	        @media (max-width: 768px) {
+	            table {
+	                min-width: 680px;
+	            }
+	        }
         
         thead {
             background: rgba(0, 212, 255, 0.1);
@@ -341,13 +355,6 @@ HTML_TEMPLATE = """
     </script>
 </head>
 <body>
-    <div class="reload-overlay" id="reloadOverlay" aria-hidden="true">
-        <div class="reload-card">
-            <div class="spinner"></div>
-            <div style="font-weight:800; color:#00d4ff; margin-bottom:6px;">Refreshing</div>
-            <div style="font-size:13px; color: rgba(231,234,243,0.78);">Pulling latest balance & positions…</div>
-        </div>
-    </div>
     <div class="refresh-hud" id="refreshHud">
         <div class="refresh-row">
             <div>Auto refresh</div>
@@ -422,13 +429,14 @@ HTML_TEMPLATE = """
             </div>
         </div>
         
-        <div class="section">
-            <div class="section-title">📍 Open Positions</div>
-            {% if open_positions %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>Symbol</th>
+	        <div class="section">
+	            <div class="section-title">📍 Open Positions</div>
+	            {% if open_positions %}
+	            <div class="table-wrap">
+	            <table>
+	                <thead>
+	                    <tr>
+	                        <th>Symbol</th>
                         <th>Direction</th>
                         <th>Size</th>
                         <th>Entry Price</th>
@@ -449,24 +457,26 @@ HTML_TEMPLATE = """
                         <td>{{ pos.size }}</td>
                         <td>{{ "%.5f"|format(pos.entry_price) }}</td>
                         <td>{{ "%.5f"|format(pos.spread) }}</td>
-                        <td>{{ "%.5f"|format(pos.stop_loss) }}</td>
-                        <td>{{ "%.5f"|format(pos.take_profit) }}</td>
+                        <td>{% if pos.stop_loss is not none %}{{ "%.5f"|format(pos.stop_loss) }}{% else %}—{% endif %}</td>
+                        <td>{% if pos.take_profit is not none %}{{ "%.5f"|format(pos.take_profit) }}{% else %}—{% endif %}</td>
                     </tr>
                     {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="no-data">No open positions</div>
-            {% endif %}
-        </div>
+	                </tbody>
+	            </table>
+	            </div>
+	            {% else %}
+	            <div class="no-data">No open positions</div>
+	            {% endif %}
+	        </div>
         
-        <div class="section">
-            <div class="section-title">✅ Closed Trades</div>
-            {% if closed_trades %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>Symbol</th>
+	        <div class="section">
+	            <div class="section-title">✅ Closed Trades</div>
+	            {% if closed_trades %}
+	            <div class="table-wrap">
+	            <table>
+	                <thead>
+	                    <tr>
+	                        <th>Symbol</th>
                         <th>Direction</th>
                         <th>Entry Price</th>
                         <th>Exit Price</th>
@@ -493,12 +503,13 @@ HTML_TEMPLATE = """
                         <td>{{ trade.reason }}</td>
                     </tr>
                     {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="no-data">No closed trades yet</div>
-            {% endif %}
-        </div>
+	                </tbody>
+	            </table>
+	            </div>
+	            {% else %}
+	            <div class="no-data">No closed trades yet</div>
+	            {% endif %}
+	        </div>
     </div>
 </body>
 </html>

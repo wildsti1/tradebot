@@ -141,6 +141,18 @@ class CapitalClient:
             logging.error(f"Error fetching positions: {str(e)}")
             return None
 
+    def get_confirmation(self, deal_reference):
+        """Fetches order confirmation details for a deal reference."""
+        if not deal_reference:
+            return None
+        url = f"{self.base_url}/confirms/{deal_reference}"
+        try:
+            response = requests.get(url, headers=self.headers)
+            return response.json()
+        except Exception as e:
+            logging.error(f"Error fetching confirmation for {deal_reference}: {str(e)}")
+            return None
+
     def get_trade_history(self, endpoint=None, params=None):
         """Fetches trade history or closed positions from Capital API."""
         if endpoint is None:
@@ -179,9 +191,11 @@ class CapitalClient:
             "epic": epic,
             "direction": direction,  # BUY or SELL
             "size": size,
-            "stopLevel": stop_level,
-            "limitLevel": limit_level
         }
+        if stop_level is not None:
+            payload["stopLevel"] = stop_level
+        if limit_level is not None:
+            payload["limitLevel"] = limit_level
         try:
             response = requests.post(url, json=payload, headers=self.headers)
             return response.json()
