@@ -27,4 +27,5 @@ user_data/data/*.csv
 .DS_Store
 .idea/
 .vscode/
-*.swp
+*.swp.env
+.env-secondary

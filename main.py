@@ -9,6 +9,15 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import inspect
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
+logger = logging.getLogger(__name__)
+
 SOFIA_TZ = ZoneInfo('Europe/Sofia')
 
 # ==========================================================
@@ -27,15 +36,6 @@ from utils.capital_api import CapitalClient
 # import user_data.strategies.harmonic_strategy as harmonic_module
 import user_data.strategies.consolidation_breakout_strategy as breakout_module
 from web import app, run_web_server, balance_info, open_positions, closed_trades, capital_api_stats, set_strategy_and_pairs
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
 
 TRADE_LOG_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "user_data", "logs", "trades")
 
